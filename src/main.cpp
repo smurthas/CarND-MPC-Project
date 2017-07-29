@@ -126,6 +126,8 @@ int main(int argc, char* argv[]) {
           // estimate total delay as solver + actuators
           double delay_s = (solve_delay + actuator_delay) / 1000.0;
 
+          // estimate what the value of x, y, psi, and v will be when the
+          // actuation actually occurs
           double x1 = (px + v * cos(psi) * delay_s);
           double y1 = (py + v * sin(psi) * delay_s);
           double psi1 = (psi + v * prev_delta / mpc.Lf * delay_s);
@@ -137,14 +139,16 @@ int main(int argc, char* argv[]) {
           vector<double> next_x_vals;
           vector<double> next_y_vals;
 
+          // because we convert to the vehicle's coordinate frame, x, y, and psi
+          // are all zero.
           Eigen::VectorXd state(4);
           state << 0, 0, 0, v1;
 
           Eigen::VectorXd xvals(ptsx.size());
           Eigen::VectorXd yvals(ptsy.size());
+          // convert the waypoints to the vehicle's coordinate frame, using the
+          // estimated pose at actuation time (i.e. x1, y1, psi1)
           for (int i = 0; i < ptsx.size(); i++) {
-            // TODO: convert to vehicle coords?
-            //double theta = psi + 1.57; // rotation from map coords
             double dx_map = ptsx[i] - x1;
             double dy_map = ptsy[i] - y1;
             double f = -1.0 * psi1;
@@ -155,6 +159,8 @@ int main(int argc, char* argv[]) {
             next_x_vals.push_back(x_vehicle);
             next_y_vals.push_back(y_vehicle);
           }
+
+          // fit a third order polynomial to the waypoints
           auto coeffs = polyfit(xvals, yvals, 3);
 
           //long long sstart = now();
@@ -162,38 +168,37 @@ int main(int argc, char* argv[]) {
           //long long send = now();
           //std::cout<< "solve ET: " << (send-sstart) << std::endl;
 
-          /*
-          * TODO: Calculate steering angle and throttle using MPC.
-          *
-          * Both are in between [-1, 1].
-          *
-          */
+          // limit the steering angle to +/- 25 deg
+          // record delta and a for use in the next time step's delay estimation
           prev_delta = min(max(output[0], -0.4363), 0.4363);
           prev_a = output[1];
+
+          // flip the sign on the steering angle and convert it to -1 -> 1 scale
+          // for simulator
           double steer_value = -1.0 * (prev_delta/0.436332);
-          //double steer_value = -1.0/25.0;
           double throttle_value = output[1];
-          //double throttle_value = 0.3;
 
           json msgJson;
           // NOTE: Remember to divide by deg2rad(25) before you send the steering value back.
           // Otherwise the values will be in between [-deg2rad(25), deg2rad(25] instead of [-1, 1].
           msgJson["steering_angle"] = steer_value;
           msgJson["throttle"] = throttle_value;
-          //msgJson["steering_angle"] = 0.1;
-          //msgJson["throttle"] = 0;;
 
           //Display the MPC predicted trajectory
           vector<double> mpc_x_vals;
           vector<double> mpc_y_vals;
 
+          // the MPC::Solve function return the X and Y coordinates for the
+          // predicted future state in the return vector after the delta and
+          // alpha values
           int point_count = output.size() / 2 - 1;
           for (int i = 0; i < point_count; i++) {
             mpc_x_vals.push_back(output[2+i]);
             mpc_y_vals.push_back(output[2+i+point_count]);
           }
 
-          //.. add (x,y) points to list here, points are in reference to the vehicle's coordinate system
+          //.. add (x,y) points to list here, points are in reference to the
+          // vehicle's coordinate system
           // the points in the simulator are connected by a Green line
 
           msgJson["mpc_x"] = mpc_x_vals;
@@ -204,6 +209,7 @@ int main(int argc, char* argv[]) {
           // vehicle's coordinate system
           // the points in the simulator are connected by a Yellow line
 
+          // display the polynomial fit in green, tne points, one every 10m
           next_x_vals.clear();
           next_y_vals.clear();
           for (double i = 0; i < 100; i+=10) {
